@@ -222,10 +222,12 @@ function App() {
       // Check current allowance
       const currentAllowance = await usdcContract.allowance(account, CONTRACT_ADDRESS);
       
-      // If not enough allowance, approve exact amount needed
+      // If not enough allowance, approve a reasonable amount ($10,000)
+      // This shows "$10,000 USDC" in wallet - not scary like "Unlimited"
       if (currentAllowance < amount) {
         setSuccess('Step 1/2: Approving USDC... Please confirm in wallet.');
-        const approveTx = await usdcContract.approve(CONTRACT_ADDRESS, amount);
+        const approvalAmount = ethers.parseUnits("10000", 6); // $10,000 USDC
+        const approveTx = await usdcContract.approve(CONTRACT_ADDRESS, approvalAmount);
         await approveTx.wait();
         setSuccess('Approval confirmed! Step 2/2: Depositing...');
       }
