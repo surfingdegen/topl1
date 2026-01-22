@@ -43,7 +43,6 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
-  const [isApproved, setIsApproved] = useState(false);
   const [usdcBalance, setUsdcBalance] = useState('0');
 
   useEffect(() => {
@@ -83,7 +82,6 @@ function App() {
   useEffect(() => {
     if (account && signer) {
       loadBalances();
-      checkApproval();
       loadUSDCBalance();
     }
   }, [account, signer]);
@@ -163,7 +161,6 @@ function App() {
     setAccount(null);
     setSigner(null);
     setBalances([0, 0, 0, 0, 0]);
-    setIsApproved(false);
     setUsdcAmount('');
     setUsdcBalance('0');
     setSuccess('Wallet disconnected');
@@ -197,41 +194,17 @@ function App() {
     }
   };
 
-  const checkApproval = async () => {
-    if (!signer || !account) return;
+  const checkApproval = async (amount) => {
+    if (!signer || !account) return false;
     
     try {
       const usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, signer);
       const allowance = await usdcContract.allowance(account, CONTRACT_ADDRESS);
-      setIsApproved(allowance > 0);
+      const requiredAmount = amount ? ethers.parseUnits(amount, 6) : 0n;
+      return allowance >= requiredAmount;
     } catch (err) {
       console.error('Error checking approval:', err);
-    }
-  };
-
-  const approveUSDC = async () => {
-    if (!signer) return;
-    
-    setLoading(true);
-    setError('');
-    
-    try {
-      const usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, signer);
-      const tx = await usdcContract.approve(CONTRACT_ADDRESS, ethers.MaxUint256);
-      setSuccess('Approval transaction submitted... Please wait.');
-      await tx.wait();
-      setIsApproved(true);
-      setSuccess('USDC approved successfully!');
-      setTimeout(() => setSuccess(''), 3000);
-    } catch (err) {
-      console.error('Approval error:', err);
-      if (err.code === 4001) {
-        setError('Approval rejected by user');
-      } else {
-        setError('Approval failed: ' + (err.shortMessage || err.message || 'Unknown error'));
-      }
-    } finally {
-      setLoading(false);
+      return false;
     }
   };
 
@@ -243,8 +216,22 @@ function App() {
     setSuccess('');
     
     try {
-      const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
+      const usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, signer);
       const amount = ethers.parseUnits(usdcAmount, 6);
+      
+      // Check current allowance
+      const currentAllowance = await usdcContract.allowance(account, CONTRACT_ADDRESS);
+      
+      // If not enough allowance, approve exact amount needed
+      if (currentAllowance < amount) {
+        setSuccess('Step 1/2: Approving USDC... Please confirm in wallet.');
+        const approveTx = await usdcContract.approve(CONTRACT_ADDRESS, amount);
+        await approveTx.wait();
+        setSuccess('Approval confirmed! Step 2/2: Depositing...');
+      }
+      
+      // Now deposit
+      const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
       const tx = await contract.deposit(amount);
       setSuccess('Deposit transaction submitted... Please wait.');
       await tx.wait();
@@ -256,7 +243,7 @@ function App() {
     } catch (err) {
       console.error('Deposit error:', err);
       if (err.code === 4001) {
-        setError('Deposit rejected by user');
+        setError('Transaction rejected by user');
       } else {
         setError('Deposit failed: ' + (err.shortMessage || err.message || 'Unknown error'));
       }
@@ -447,24 +434,14 @@ function App() {
                   </div>
                 )}
 
-                {!isApproved ? (
-                  <button
-                    onClick={approveUSDC}
-                    disabled={loading}
-                    className="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 sm:py-4 px-6 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed text-sm sm:text-base active:scale-95"
-                  >
-                    {loading ? 'Approving...' : 'Approve USDC'}
-                  </button>
-                ) : (
-                  <button
-                    onClick={handleDeposit}
-                    disabled={loading || !usdcAmount || parseFloat(usdcAmount) < 10}
-                    className="w-full bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white font-semibold py-3 sm:py-4 px-6 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-sm sm:text-base active:scale-95"
-                  >
-                    {loading ? 'Processing...' : 'Deposit & Diversify'}
-                    {!loading && <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5" />}
-                  </button>
-                )}
+                <button
+                  onClick={handleDeposit}
+                  disabled={loading || !usdcAmount || parseFloat(usdcAmount) < 10}
+                  className="w-full bg-gradient-to-r from-blue-500 to-purple-500 hover:from-blue-600 hover:to-purple-600 text-white font-semibold py-3 sm:py-4 px-6 rounded-xl transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 text-sm sm:text-base active:scale-95"
+                >
+                  {loading ? 'Processing...' : 'Deposit & Diversify'}
+                  {!loading && <ArrowRight className="w-4 h-4 sm:w-5 sm:h-5" />}
+                </button>
               </div>
             ) : (
               <div className="space-y-4 sm:space-y-6">
