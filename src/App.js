@@ -53,19 +53,60 @@ function App() {
     });
 
     const walletProvider = coinbaseWallet.makeWeb3Provider();
+
     setSdk(coinbaseWallet);
     setProvider(walletProvider);
+
+    walletProvider.on('accountsChanged', (accounts) => {
+      if (accounts.length === 0) {
+        disconnectWallet();
+      } else {
+        setAccount(accounts[0]);
+      }
+    });
+
+    walletProvider.on('chainChanged', (chainId) => {
+      if (parseInt(chainId) !== BASE_CHAIN_ID) {
+        setError('Please switch to Base network');
+      } else {
+        setError('');
+      }
+    });
+
+    return () => {
+      if (walletProvider) {
+        walletProvider.removeAllListeners();
+      }
+    };
   }, []);
 
+  useEffect(() => {
+    if (account && signer) {
+      loadBalances();
+      checkApproval();
+      loadUSDCBalance();
+    }
+  }, [account, signer]);
+
   const connectWallet = async () => {
-    if (!provider) return;
-    
-    setLoading(true);
-    setError('');
-    
     try {
-      const accounts = await provider.request({ method: 'eth_requestAccounts' });
-      
+      setError('');
+      setLoading(true);
+
+      if (!provider) {
+        setError('Wallet provider not initialized');
+        return;
+      }
+
+      const accounts = await provider.request({
+        method: 'eth_requestAccounts'
+      });
+
+      if (!accounts || accounts.length === 0) {
+        setError('No accounts found. Please unlock your Coinbase Wallet.');
+        return;
+      }
+
       const chainId = await provider.request({ method: 'eth_chainId' });
       
       if (chainId !== BASE_CHAIN_ID_HEX) {
@@ -81,10 +122,14 @@ function App() {
               params: [{
                 chainId: BASE_CHAIN_ID_HEX,
                 chainName: 'Base',
-                nativeCurrency: { name: 'Ethereum', symbol: 'ETH', decimals: 18 },
+                nativeCurrency: {
+                  name: 'Ethereum',
+                  symbol: 'ETH',
+                  decimals: 18
+                },
                 rpcUrls: ['https://mainnet.base.org'],
-                blockExplorerUrls: ['https://basescan.org'],
-              }],
+                blockExplorerUrls: ['https://basescan.org']
+              }]
             });
           } else {
             throw switchError;
@@ -93,60 +138,74 @@ function App() {
       }
 
       const ethersProvider = new ethers.BrowserProvider(provider);
-      const signer = await ethersProvider.getSigner();
-      
+      const ethersSigner = await ethersProvider.getSigner();
+
       setAccount(accounts[0]);
-      setSigner(signer);
-      
-      await loadBalances(accounts[0], signer);
-      await checkAllowance(accounts[0], ethersProvider);
-      await loadUsdcBalance(accounts[0], ethersProvider);
-      
+      setSigner(ethersSigner);
+      setSuccess('Wallet connected successfully!');
+      setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
-      setError(err.message || 'Failed to connect wallet');
+      console.error('Connection error:', err);
+      if (err.code === 4001) {
+        setError('Connection rejected by user');
+      } else {
+        setError('Failed to connect: ' + (err.message || 'Unknown error'));
+      }
     } finally {
       setLoading(false);
     }
   };
 
   const disconnectWallet = () => {
+    if (provider) {
+      provider.disconnect();
+    }
     setAccount(null);
     setSigner(null);
     setBalances([0, 0, 0, 0, 0]);
     setIsApproved(false);
+    setUsdcAmount('');
     setUsdcBalance('0');
+    setSuccess('Wallet disconnected');
+    setTimeout(() => setSuccess(''), 3000);
   };
 
-  const loadUsdcBalance = async (address, ethersProvider) => {
+  const loadUSDCBalance = async () => {
+    if (!signer || !account) return;
+    
     try {
-      const usdc = new ethers.Contract(USDC_ADDRESS, USDC_ABI, ethersProvider);
-      const balance = await usdc.balanceOf(address);
+      const usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, signer);
+      const balance = await usdcContract.balanceOf(account);
       setUsdcBalance(ethers.formatUnits(balance, 6));
     } catch (err) {
-      console.error('Failed to load USDC balance:', err);
+      console.error('Error loading USDC balance:', err);
     }
   };
 
-  const loadBalances = async (address, signer) => {
+  const loadBalances = async () => {
+    if (!signer || !account) return;
+    
     try {
       const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
-      const result = await contract.getUserBalances(address);
+      const result = await contract.getUserBalances(account);
       const formattedBalances = ASSETS.map((asset, idx) => 
         parseFloat(ethers.formatUnits(result[idx], asset.decimals))
       );
       setBalances(formattedBalances);
     } catch (err) {
-      console.error('Failed to load balances:', err);
+      console.error('Error loading balances:', err);
     }
   };
 
-  const checkAllowance = async (address, ethersProvider) => {
+  const checkApproval = async () => {
+    if (!signer || !account) return;
+    
     try {
-      const usdc = new ethers.Contract(USDC_ADDRESS, USDC_ABI, ethersProvider);
-      const allowance = await usdc.allowance(address, CONTRACT_ADDRESS);
-      setIsApproved(allowance > 0n);
+      const usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, signer);
+      const allowance = await usdcContract.allowance(account, CONTRACT_ADDRESS);
+      setIsApproved(allowance > 0);
     } catch (err) {
-      console.error('Failed to check allowance:', err);
+      console.error('Error checking approval:', err);
     }
   };
 
@@ -155,16 +214,22 @@ function App() {
     
     setLoading(true);
     setError('');
-    setSuccess('');
     
     try {
-      const usdc = new ethers.Contract(USDC_ADDRESS, USDC_ABI, signer);
-      const tx = await usdc.approve(CONTRACT_ADDRESS, ethers.MaxUint256);
+      const usdcContract = new ethers.Contract(USDC_ADDRESS, USDC_ABI, signer);
+      const tx = await usdcContract.approve(CONTRACT_ADDRESS, ethers.MaxUint256);
+      setSuccess('Approval transaction submitted... Please wait.');
       await tx.wait();
       setIsApproved(true);
       setSuccess('USDC approved successfully!');
+      setTimeout(() => setSuccess(''), 3000);
     } catch (err) {
-      setError('Approval failed: ' + (err.message || 'Unknown error'));
+      console.error('Approval error:', err);
+      if (err.code === 4001) {
+        setError('Approval rejected by user');
+      } else {
+        setError('Approval failed: ' + (err.shortMessage || err.message || 'Unknown error'));
+      }
     } finally {
       setLoading(false);
     }
@@ -181,15 +246,20 @@ function App() {
       const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
       const amount = ethers.parseUnits(usdcAmount, 6);
       const tx = await contract.deposit(amount);
+      setSuccess('Deposit transaction submitted... Please wait.');
       await tx.wait();
-      
-      setSuccess('Deposit successful! Your USDC has been diversified into 5 L1 tokens.');
+      setSuccess('Deposit successful! Your USDC has been diversified.');
       setUsdcAmount('');
-      await loadBalances(account, signer);
-      const ethersProvider = new ethers.BrowserProvider(provider);
-      await loadUsdcBalance(account, ethersProvider);
+      await loadBalances();
+      await loadUSDCBalance();
+      setTimeout(() => setSuccess(''), 5000);
     } catch (err) {
-      setError('Deposit failed: ' + (err.shortMessage || err.message || 'Unknown error'));
+      console.error('Deposit error:', err);
+      if (err.code === 4001) {
+        setError('Deposit rejected by user');
+      } else {
+        setError('Deposit failed: ' + (err.shortMessage || err.message || 'Unknown error'));
+      }
     } finally {
       setLoading(false);
     }
@@ -205,14 +275,17 @@ function App() {
     try {
       const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, signer);
       const tx = await contract.withdraw();
+      setSuccess('Withdrawal transaction submitted... Please wait.');
       await tx.wait();
-      
       setSuccess('Withdrawal successful! All tokens converted back to USDC.');
-      await loadBalances(account, signer);
-      const ethersProvider = new ethers.BrowserProvider(provider);
-      await loadUsdcBalance(account, ethersProvider);
+      await loadBalances();
+      await loadUSDCBalance();
+      setTimeout(() => setSuccess(''), 5000);
     } catch (err) {
-      if (err.message && err.message.includes('execution reverted')) {
+      console.error('Withdrawal error:', err);
+      if (err.code === 4001) {
+        setError('Withdrawal rejected by user');
+      } else if (err.message && err.message.includes('execution reverted')) {
         setError('Withdrawal failed: Likely reasons: 1) Amounts too small to swap (need minimum liquidity) 2) DEX pools lack liquidity. Consider depositing more first.');
       } else {
         setError('Withdrawal failed: ' + (err.shortMessage || err.message || 'Unknown error'));
@@ -251,7 +324,7 @@ function App() {
 
             <div className="flex justify-center gap-4 mt-4 sm:mt-6">
               <a 
-                href="https://github.com" 
+                href="https://github.com/surfingdegen/topl1" 
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="text-blue-400 text-sm hover:underline"
@@ -260,7 +333,7 @@ function App() {
               </a>
               <span className="text-gray-600">•</span>
               <a 
-                href="https://etherscan.io" 
+                href="https://basescan.org/address/0x350386d7FB4d9F230ce52eEE794ddc5392777048" 
                 target="_blank" 
                 rel="noopener noreferrer"
                 className="text-blue-400 text-sm hover:underline"
